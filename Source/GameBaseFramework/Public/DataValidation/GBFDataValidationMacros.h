@@ -1,5 +1,8 @@
 #pragma once
 
+#include <CoreMinimal.h>
+#include <UObject/UObjectGlobals.h>
+
 #if WITH_EDITOR
 
 #define DATA_VALIDATION_INTERNAL_CONDITION_SUFFIX( ErrorCondition, ErrorMessageText, SuffixText )           \
@@ -103,5 +106,141 @@
 
 #define DATA_VALIDATION_RETURN() \
     return validation_errors.Num() > 0 ? EDataValidationResult::Invalid : EDataValidationResult::Valid;
+
+class GAMEBASEFRAMEWORK_API FGBFDataValidator
+{
+public:
+    FGBFDataValidator( UObject & object, TArray< FText > & validation_errors );
+
+    FGBFDataValidator & NotNull( FName property_name );
+    FGBFDataValidator & Custom( const TFunctionRef< FText() > & predicate );
+
+    template < class _TYPE_ >
+    FGBFDataValidator & GreaterThan( const FName property_name, const _TYPE_ value )
+    {
+        return CompareProperty< TProperty_Numeric< _TYPE_ >, _TYPE_, std::greater< _TYPE_ > >(
+            property_name,
+            value,
+            FText::FromString( FString::Printf( TEXT( "%s must be greater than %f" ), *property_name.ToString(), value ) ) );
+    }
+
+    template < class _TYPE_ >
+    FGBFDataValidator & GreaterOrEqualThan( const FName property_name, const _TYPE_ value )
+    {
+        return CompareProperty< TProperty_Numeric< _TYPE_ >, _TYPE_, std::greater_equal< _TYPE_ > >(
+            property_name,
+            value,
+            FText::FromString( FString::Printf( TEXT( "%s must be greater or equal than %f" ), *property_name.ToString(), value ) ) );
+    }
+
+    template < class _TYPE_ >
+    FGBFDataValidator & LessThan( const FName property_name, const _TYPE_ value )
+    {
+        return CompareProperty< TProperty_Numeric< _TYPE_ >, _TYPE_, std::less< _TYPE_ > >(
+            property_name,
+            value,
+            FText::FromString( FString::Printf( TEXT( "%s must be less than %f" ), *property_name.ToString(), value ) ) );
+    }
+
+    template < class _TYPE_ >
+    FGBFDataValidator & LessOrEqualThan( const FName property_name, const _TYPE_ value )
+    {
+        return CompareProperty< TProperty_Numeric< _TYPE_ >, _TYPE_, std::less_equal< _TYPE_ > >(
+            property_name,
+            value,
+            FText::FromString( FString::Printf( TEXT( "%s must be less or equal than %f" ), *property_name.ToString(), value ) ) );
+    }
+
+    FGBFDataValidator & NotEmpty( FName property_name );
+    FGBFDataValidator & Empty( FName property_name );
+    FGBFDataValidator & NoNullItem( FName property_name );
+
+    EDataValidationResult Result() const;
+
+private:
+    template < class _PREDICATE_TYPE_ >
+    FGBFDataValidator & CheckContainer( const FName property_name, const FText & error_message, _PREDICATE_TYPE_ predicate )
+    {
+        auto found_type = false;
+
+        const auto check = [this, &error_message, &found_type, &predicate]( const auto * container_property ) {
+            if ( container_property == nullptr )
+            {
+                return;
+            }
+
+            found_type = true;
+
+            if ( !predicate( container_property ) )
+            {
+                AddError( error_message );
+            }
+        };
+
+        const auto container_properties_tuple = GetContainerPropertyTuple( property_name );
+        VisitTupleElements( check, container_properties_tuple );
+
+        if ( !found_type )
+        {
+            AddError( FText::FromString( FString::Printf( TEXT( "%s could not be used as a container property" ), *property_name.ToString() ) ) );
+        }
+
+        return *this;
+    }
+
+    template < class _COMPARATOR_TYPE_, int _CONTAINER_SIZE_ = 0 >
+    FGBFDataValidator & CheckContainerSize( const FName property_name, const FText & error_message, _COMPARATOR_TYPE_ comparator = _COMPARATOR_TYPE_() )
+    {
+        return CheckContainer( property_name, error_message, [comparator, this]( const auto * container_property ) {
+            return comparator( container_property->GetPropertyValue_InContainer( &Object ).Num(), _CONTAINER_SIZE_ );
+        } );
+    }
+
+    TTuple< UArrayProperty * > GetContainerPropertyTuple( const FName property_name )
+    {
+        return MakeTuple( GetTypedProperty< UArrayProperty >( property_name, false )/*, GetTypedProperty< USetProperty >( property_name, false )*/ );
+    }
+
+    template < class _PROPERTY_TYPE_, class _VALUE_TYPE_, class _COMPARATOR_TYPE_ >
+    FGBFDataValidator & CompareProperty( const FName property_name, const _VALUE_TYPE_ value, const FText & error_message, _COMPARATOR_TYPE_ comparator = _COMPARATOR_TYPE_() )
+    {
+        if ( auto * property = GetTypedProperty< _PROPERTY_TYPE_ >( property_name ) )
+        {
+            const auto property_value = property->GetPropertyValue_InContainer( &Object );
+
+            if ( !comparator( property_value, value ) )
+            {
+                AddError( error_message );
+            }
+        }
+
+        return *this;
+    }
+
+    template < class _PROPERTY_TYPE_ >
+    _PROPERTY_TYPE_ * GetTypedProperty( const FName property_name, const bool add_error_if_type_not_found = true )
+    {
+        if ( auto * property = ObjectClass->FindPropertyByName( property_name ) )
+        {
+            if ( auto * typed_property = Cast< _PROPERTY_TYPE_ >( property ) )
+            {
+                return typed_property;
+            }
+        }
+
+        if ( add_error_if_type_not_found )
+        {
+            AddError( FText::FromString( FString::Printf( TEXT( "Could not find or cast to the correct type a property named %s" ), *property_name.ToString() ) ) );
+        }
+        return nullptr;
+    }
+
+    void AddError( FText text );
+
+    UObject & Object;
+    EDataValidationResult ValidationResult;
+    UClass * ObjectClass;
+    TArray< FText > & ValidationErrors;
+};
 
 #endif
